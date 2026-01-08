@@ -22,6 +22,7 @@ func (r *httpProxyHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 	ctxRequest, ctxRequestCancel := context.WithTimeout(r.ctx, time.Second*6)
 	defer ctxRequestCancel()
 
+	request.RequestURI = strings.TrimPrefix(request.RequestURI, "/")
 	remoteHost, _, _ := net.SplitHostPort(request.RemoteAddr)
 	ip := net.ParseIP(remoteHost)
 	cfConnectingIp := strings.TrimSpace(request.Header.Get("cf-connecting-ip"))
@@ -32,7 +33,7 @@ func (r *httpProxyHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 
 	r.logger.Printf("[httpProxyHandler] request: %v %v\n", request.Method, request.RequestURI)
 
-	req, err := http.NewRequestWithContext(ctxRequest, request.Method, fmt.Sprintf("%s/%s", r.downstream, strings.TrimPrefix(request.RequestURI, "/")), request.Body)
+	req, err := http.NewRequestWithContext(ctxRequest, request.Method, fmt.Sprintf("%s/%s", r.downstream, request.RequestURI), request.Body)
 	if err != nil {
 		r.logger.Printf("[httpProxyHandler] error creating a request: %v\n", err)
 		writer.WriteHeader(500)
@@ -42,7 +43,7 @@ func (r *httpProxyHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 	req.Header.Set("X-IP", ip.String())
 	req.Header.Set("X-Proxied-Host", request.Host)
 
-	r.logger.Printf("[httpProxyHandler] proxying to %s\n", fmt.Sprintf("%s/%s", r.downstream, strings.TrimPrefix(request.RequestURI, "/")))
+	r.logger.Printf("[httpProxyHandler] proxying to %s\n", fmt.Sprintf("%s/%s", r.downstream, request.RequestURI))
 	res, err := r.httpClient.Do(req)
 	if err != nil {
 		r.logger.Printf("[httpProxyHandler] error making request: %v\n", err)
@@ -72,6 +73,7 @@ func spawnHttpProxy(ctx context.Context, logger *log.Logger, addr, httpProxyDown
 	if !strings.Contains(addr, ":") {
 		addr = addr + ":80"
 	}
+	httpProxyDownstream = strings.TrimSuffix(httpProxyDownstream, "/")
 
 	server := http.Server{
 		Addr:              addr,
