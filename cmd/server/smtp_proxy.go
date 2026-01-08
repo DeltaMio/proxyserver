@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -46,7 +45,7 @@ func (s *Session) Data(r io.Reader) error {
 func (b *Backend) NewSession(_ *smtp.Conn) (smtp.Session, error) { return &Session{Backend: b}, nil }
 
 func spawnSmtpProxy(ctx context.Context, logger *log.Logger, addr, smtpProxyDownstream, smtpProxyDatabase string) error {
-	db, err := sql.Open("sqlite3", fmt.Sprintf("%s?_journal_mode=WAL", smtpProxyDatabase))
+	db, err := sql.Open("sqlite3", smtpProxyDatabase)
 	if err != nil {
 		return err
 	}

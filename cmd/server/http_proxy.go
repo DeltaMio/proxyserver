@@ -38,10 +38,11 @@ func (r *httpProxyHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 		writer.WriteHeader(500)
 		return
 	}
-
 	req.Header.Set("User-Agent", request.UserAgent())
 	req.Header.Set("X-IP", ip.String())
 	req.Header.Set("X-Proxied-Host", request.Host)
+
+	r.logger.Printf("[httpProxyHandler] proxying to %s\n", fmt.Sprintf("%s/%s", r.downstream, strings.TrimPrefix(request.RequestURI, "/")))
 	res, err := r.httpClient.Do(req)
 	if err != nil {
 		r.logger.Printf("[httpProxyHandler] error making request: %v\n", err)

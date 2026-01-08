@@ -27,6 +27,9 @@ func spawnSocks5Proxy(ctx context.Context, logger *log.Logger, serveAddr, socks5
 	}
 
 	server := socks5.NewServer(logger, proxyFromIP)
+	server.OnConnected(func(network, address string, port int) {
+		logger.Printf("[socks5Proxy] proxying to %s\n", address)
+	})
 	server.EnableUDP()
 	server.SetAuthHandle(func(username, password string) bool {
 		return username == socks5Username && password == socks5Password
