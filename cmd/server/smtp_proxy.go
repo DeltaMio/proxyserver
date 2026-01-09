@@ -45,24 +45,23 @@ func (s *Session) Data(r io.Reader) error {
 func (b *Backend) NewSession(_ *smtp.Conn) (smtp.Session, error) { return &Session{Backend: b}, nil }
 
 func spawnSmtpProxy(ctx context.Context, logger *log.Logger, addr, smtpProxyDownstream, smtpProxyDatabase string) error {
-	db, err := sql.Open("sqlite3", smtpProxyDatabase)
-	if err != nil {
-		return err
+	db, errOpen := sql.Open("sqlite3", smtpProxyDatabase)
+	if errOpen != nil {
+		return errOpen
 	}
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS emails (
+	_, errExec := db.Exec(`CREATE TABLE IF NOT EXISTS emails (
 		id INTEGER PRIMARY KEY,
 		from_addr TEXT NOT NULL,
 		to_addrs TEXT NOT NULL,
 		raw_data BLOB NOT NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
-	if err != nil {
-		return err
+	if errExec != nil {
+		return errExec
 	}
 
 	b := &Backend{logger: logger, db: db}
 
-	// Forwarder
 	go func() {
 		for {
 			if ctx.Err() != nil {
@@ -71,36 +70,53 @@ func spawnSmtpProxy(ctx context.Context, logger *log.Logger, addr, smtpProxyDown
 
 			time.Sleep(5 * time.Second)
 
-			rows, _ := b.db.Query("SELECT id, from_addr, to_addrs, raw_data FROM emails ORDER BY created_at LIMIT 100")
-			for rows.Next() {
-				if ctx.Err() != nil {
-					return
-				}
+			type rowSchema struct {
+				id   int64
+				from string
+				to   string
+				body []byte
+			}
+			var rows []rowSchema
 
-				var id int64
-				var from, toJSON string
-				var raw []byte
-				_ = rows.Scan(&id, &from, &toJSON, &raw)
+			tableRows, err := b.db.Query("SELECT id, from_addr, to_addrs, raw_data FROM emails ORDER BY created_at LIMIT 100")
+			if err != nil {
+				logger.Printf("[smtpProxy] error selecting: %v\n", err)
+				continue
+			}
+			for tableRows.Next() {
+				var row rowSchema
+				_ = tableRows.Scan(&row.id, &row.from, &row.to, &row.body)
+				rows = append(rows, row)
+			}
+			_ = tableRows.Close()
 
+			for i := range rows {
 				body, _ := json.Marshal(map[string]any{
-					"id":   id,
-					"from": from,
-					"to":   json.RawMessage(toJSON),
-					"raw":  raw,
+					"from": rows[i].from,
+					"to":   json.RawMessage(rows[i].to),
+					"raw":  rows[i].body,
 				})
 
 				resp, errForward := http.Post(smtpProxyDownstream, "application/json", bytes.NewReader(body))
-				if errForward != nil || resp.StatusCode != 200 {
+				if errForward != nil {
 					logger.Printf("[smtpProxy] error forwarding email: %v\n", errForward)
-					_ = rows.Close()
+					break
+				}
+				if resp.StatusCode != 200 {
+					_ = resp.Body.Close()
+					logger.Printf("[smtpProxy] error forwarding email: non 200 status code\n")
 					break
 				}
 				_ = resp.Body.Close()
-				_, _ = b.db.Exec("DELETE FROM emails WHERE id = ?", id)
 
-				logger.Printf("[smtpProxy] forwarded an email successfully\n")
+				_, err = b.db.Exec("DELETE FROM emails WHERE id = ?", rows[i].id)
+				if err != nil {
+					logger.Printf("[smtpProxy] error deleting: %v\n", err)
+					break
+				}
+
+				logger.Printf("[smtpProxy] forwarded an email to %s\n", smtpProxyDownstream)
 			}
-			_ = rows.Close()
 		}
 	}()
 
