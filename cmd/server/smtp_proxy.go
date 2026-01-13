@@ -3,16 +3,48 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/json"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"time"
 
 	"github.com/emersion/go-smtp"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+func generateTLSCert() (tls.Certificate, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().AddDate(10, 0, 0),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	return tls.Certificate{
+		Certificate: [][]byte{certDER},
+		PrivateKey:  key,
+	}, nil
+}
 
 type Backend struct {
 	logger *log.Logger
@@ -126,6 +158,11 @@ func spawnSmtpProxy(ctx context.Context, logger *log.Logger, addr, smtpProxyDown
 	s.Addr = addr + ":25"
 	s.Domain = "localhost"
 	s.AllowInsecureAuth = true
+
+	// Configure STARTTLS
+	if cert, err := generateTLSCert(); err == nil {
+		s.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+	}
 
 	go func() {
 		select {
